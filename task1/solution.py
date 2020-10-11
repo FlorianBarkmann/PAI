@@ -97,8 +97,8 @@ class Model():
         pred_norm = norm(predicted, var.numpy())
         
         prop = 1-pred_norm.cdf([0.5]*len(predicted))
-        predicted[(predicted<0.5) & (prop > 0.35)] = 0.5000001
-        print(sum((predicted<0.5) & (prop > 0.35)))
+        predicted[(predicted<0.5) & (prop > 0.3)] = 0.5000001
+        print(sum((predicted<0.5) & (prop > 0.3)))
         
         return predicted
 
