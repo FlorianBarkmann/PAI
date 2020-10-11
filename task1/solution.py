@@ -1,9 +1,10 @@
 import numpy as np
-import numpy as np
-from sklearn.gaussian_process import GaussianProcessRegressor
-from sklearn.kernel_approximation import Nystroem
-
+import torch
+import gpytorch
+from scipy.stats import norm
 ## Constant for Cost function
+
+
 THRESHOLD = 0.5
 W1 = 1
 W2 = 20
@@ -56,21 +57,85 @@ It uses predictions to compare to the ground truth using the cost_function above
 """
 
 
+# The code is copyed from the first tutorial of Gpytorch
+# link: https://docs.gpytorch.ai/en/v1.1.1/examples/01_Exact_GPs/Simple_GP_Regression.html
+
+class ExactGPModel(gpytorch.models.ExactGP):
+    def __init__(self, train_x, train_y, likelihood):
+        super(ExactGPModel, self).__init__(train_x, train_y, likelihood)
+        self.mean_module = gpytorch.means.ConstantMean()
+        self.covar_module = gpytorch.kernels.ScaleKernel(gpytorch.kernels.RBFKernel())
+
+    def forward(self, x):
+        mean_x = self.mean_module(x)
+        covar_x = self.covar_module(x)
+        return gpytorch.distributions.MultivariateNormal(mean_x, covar_x)
+
+
+
+
+
 class Model():
 
     def __init__(self):
-        self.nystroem = Nystroem()
-        self.rlf = GaussianProcessRegressor()
+        
+      
+        self.likelihood = gpytorch.likelihoods.GaussianLikelihood()
+       
 
     def predict(self, test_x):
+        test_x = torch.Tensor(test_x)
+        self.model.eval()
+        self.likelihood.eval()
 
-        x_transformed = self.nystroem.transform(test_x)
-        return self.rlf.predict(x_transformed)
+        with torch.no_grad(), gpytorch.settings.fast_pred_var():
+            observed_pred = self.likelihood(self.model(test_x))
+        
+        predicted = observed_pred.mean.numpy()		
+        
+        var = observed_pred.variance.detach()
+        pred_norm = norm(predicted, var.numpy())
+        
+        prop = 1-pred_norm.cdf([0.5]*len(predicted))
+        predicted[(predicted<0.5) & (prop > 0.35)] = 0.5000001
+        print(sum((predicted<0.5) & (prop > 0.35)))
+        
+        return predicted
 
     def fit_model(self, train_x, train_y):
+        
+        training_iter = 50
+        
+        train_x = torch.Tensor(train_x)
+        train_y = torch.Tensor(train_y)
+        
+        self.model = ExactGPModel(train_x, train_y, self.likelihood)
+        
+        self.model.train()
+        self.likelihood.train()
 
-        x_transformed = self.nystroem.fit_transform(train_x)
-        self.rlf.fit(x_transformed, train_y)
+        # Use the adam optimizer
+        optimizer = torch.optim.Adam([
+        {'params': self.model.parameters()},  # Includes GaussianLikelihood parameters
+        ], lr=0.1)
+
+        # "Loss" for GPs - the marginal log likelihood
+        mll = gpytorch.mlls.ExactMarginalLogLikelihood(self.likelihood, self.model)
+        
+        for i in range(training_iter):
+            # Zero gradients from previous iteration
+            optimizer.zero_grad()
+            # Output from model
+            output = self.model(train_x)
+            # Calc loss and backprop gradients
+            loss = -mll(output, train_y)
+            loss.backward()
+            print('Iter %d/%d - Loss: %.3f   lengthscale: %.3f   noise: %.3f' % (
+                i + 1, training_iter, loss.item(),
+                self.model.covar_module.base_kernel.lengthscale.item(),
+                self.model.likelihood.noise.item()
+            ))
+            optimizer.step()
 
 
 def main():
